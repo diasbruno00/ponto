@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import 'bootstrap/dist/css/bootstrap.min.css';
 
 // Definição do tipo para os dados do ponto
 interface Registro {
