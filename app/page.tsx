@@ -3,8 +3,13 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import 'bootstrap/dist/css/bootstrap.min.css'
+import 'bootstrap/dist/css/bootstrap.min.css';
+import { createClient } from '@supabase/supabase-js';
 
+// Inicialização do Supabase
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface Registro {
   id: number;
@@ -17,6 +22,7 @@ interface Registro {
 export default function FolhaDePonto() {
   const [registros, setRegistros] = useState<Registro[]>([]);
   const [isEditing, setIsEditing] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({ 
     nome: '', 
     data: new Date().toISOString().split('T')[0], 
@@ -25,37 +31,52 @@ export default function FolhaDePonto() {
   });
   const [filtroData, setFiltroData] = useState(new Date().toISOString().split('T')[0]);
 
-  // Carregar dados
-  useEffect(() => {
-    const dadosSalvos = localStorage.getItem('ponto_arte_maos_flores');
-    if (dadosSalvos) {
-      setRegistros(JSON.parse(dadosSalvos));
+  // CARREGAR DADOS DO SUPABASE
+  const carregarDados = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('registros_ponto')
+      .select('*')
+      .order('id', { ascending: false });
+
+    if (error) {
+      console.error("Erro ao buscar dados:", error);
+    } else {
+      setRegistros(data || []);
     }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    carregarDados();
   }, []);
 
-  // Salvar dados
-  useEffect(() => {
-    localStorage.setItem('ponto_arte_maos_flores', JSON.stringify(registros));
-  }, [registros]);
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoading(true);
     
     if (isEditing !== null) {
-      // Lógica de Edição
-      setRegistros(prev => prev.map(reg => 
-        reg.id === isEditing ? { ...formData, id: isEditing } : reg
-      ));
-      setIsEditing(null);
-      alert("Registro atualizado!");
+      // ATUALIZAR NO SUPABASE
+      const { error } = await supabase
+        .from('registros_ponto')
+        .update(formData)
+        .eq('id', isEditing);
+
+      if (!error) {
+        setIsEditing(null);
+        alert("Registro atualizado no banco!");
+      }
     } else {
-      // Lógica de Novo Registro
-      const novoRegistro = { ...formData, id: Date.now() };
-      setRegistros(prev => [...prev, novoRegistro]);
-      alert("Ponto registrado!");
+      // INSERIR NO SUPABASE
+      const { error } = await supabase
+        .from('registros_ponto')
+        .insert([formData]);
+
+      if (!error) alert("Ponto registrado na nuvem!");
     }
     
     setFormData({ ...formData, entrada: '', saida: '' });
+    carregarDados(); // Atualiza a lista para todos
   };
 
   const prepararEdicao = (reg: Registro) => {
@@ -64,9 +85,14 @@ export default function FolhaDePonto() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const excluirRegistro = (id: number) => {
-    if (confirm("Tem certeza que deseja excluir este registro?")) {
-      setRegistros(prev => prev.filter(reg => reg.id !== id));
+  const excluirRegistro = async (id: number) => {
+    if (confirm("Tem certeza que deseja excluir este registro da nuvem?")) {
+      const { error } = await supabase
+        .from('registros_ponto')
+        .delete()
+        .eq('id', id);
+
+      if (!error) carregarDados();
     }
   };
 
@@ -103,6 +129,7 @@ export default function FolhaDePonto() {
                  onError={(e) => (e.currentTarget.style.display = 'none')} />
           <h1 className="display-5 text-success fw-bold mb-0">Arte Mãos e Flores</h1>
         </div>
+        {loading && <div className="spinner-border text-success spinner-border-sm" role="status"></div>}
       </div>
 
       <div className="row g-4">
@@ -136,11 +163,11 @@ export default function FolhaDePonto() {
                            onChange={e => setFormData({...formData, saida: e.target.value})} />
                   </div>
                 </div>
-                <button type="submit" className={`btn ${isEditing ? 'btn-primary' : 'btn-success'} w-100 fw-bold`}>
+                <button type="submit" disabled={loading} className={`btn ${isEditing ? 'btn-primary' : 'btn-success'} w-100 fw-bold`}>
                   {isEditing ? 'Salvar Alterações' : 'Registrar Ponto'}
                 </button>
                 {isEditing && (
-                  <button type="button" onClick={cancelarEdicao} className="btn btn-link w-100 mt-2 text-muted">
+                  <button type="button" onClick={cancelarEdicao} className="btn btn-link w-100 mt-2 text-muted text-decoration-none">
                     Cancelar Edição
                   </button>
                 )}
@@ -153,41 +180,39 @@ export default function FolhaDePonto() {
         <div className="col-lg-8">
           <div className="card shadow-sm border-0">
             <div className="card-header bg-white d-flex justify-content-between align-items-center py-3">
-              <h5 className="mb-0 text-secondary">Registros de {filtroData}</h5>
+              <h5 className="mb-0 text-secondary fw-bold">Registros de {filtroData}</h5>
               <input type="date" className="form-control form-control-sm w-auto shadow-sm" 
                      value={filtroData} onChange={e => setFiltroData(e.target.value)} />
             </div>
             <div className="card-body p-0">
               <div className="table-responsive">
-                <table className="table table-hover mb-0 align-middle">
+                <table className="table table-hover mb-0 align-middle text-center">
                   <thead className="table-light">
                     <tr>
-                      <th className="ps-4">Nome</th>
+                      <th className="ps-4 text-start">Nome</th>
                       <th>Entrada</th>
                       <th>Saída</th>
-                      <th className="text-center">Ações</th>
+                      <th>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {registrosExibidos.length > 0 ? (
                       registrosExibidos.map((reg) => (
                         <tr key={reg.id}>
-                          <td className="ps-4 fw-bold">{reg.nome}</td>
+                          <td className="ps-4 text-start fw-bold text-dark">{reg.nome}</td>
                           <td>{reg.entrada}</td>
                           <td>{reg.saida}</td>
-                          <td className="text-center">
-                            <button onClick={() => prepararEdicao(reg)} className="btn btn-sm btn-outline-primary me-2">
-                              Editar
-                            </button>
-                            <button onClick={() => excluirRegistro(reg.id)} className="btn btn-sm btn-outline-danger">
-                              Excluir
-                            </button>
+                          <td>
+                            <div className="btn-group">
+                              <button onClick={() => prepararEdicao(reg)} className="btn btn-sm btn-outline-primary py-0 px-2">Editar</button>
+                              <button onClick={() => excluirRegistro(reg.id)} className="btn btn-sm btn-outline-danger py-0 px-2">Excluir</button>
+                            </div>
                           </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={4} className="text-center py-5 text-muted">Nenhum registro encontrado.</td>
+                        <td colSpan={4} className="text-center py-5 text-muted">Nenhum registro encontrado para este dia.</td>
                       </tr>
                     )}
                   </tbody>
@@ -196,7 +221,7 @@ export default function FolhaDePonto() {
             </div>
             {registrosExibidos.length > 0 && (
               <div className="card-footer bg-white border-0 py-3">
-                <button onClick={gerarPDF} className="btn btn-dark w-100 shadow-sm">
+                <button onClick={gerarPDF} className="btn btn-dark w-100 shadow-sm fw-bold">
                   🖨️ Gerar PDF do Dia
                 </button>
               </div>
